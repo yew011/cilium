@@ -29,41 +29,49 @@ import (
 // This tests the Istio integration, following the configuration
 // instructions specified in the Istio Getting Started Guide in
 // Documentation/gettingstarted/istio.rst.
-var _ = SkipContextIf(func() bool {
-	return helpers.SkipQuarantined() && helpers.GetCurrentK8SEnv() == "1.19"
-}, "K8sIstioTest", func() {
+var _ = Describe("K8sIstioTest", func() {
 
 	var (
 		// istioSystemNamespace is the default namespace into which Istio is
 		// installed.
 		istioSystemNamespace = "istio-system"
 
-		istioVersion = "1.5.9"
+		istioVersion = "1.6.14"
 
 		// Modifiers for pre-release testing, normally empty
-		prerelease     = "" // "-beta.1"
-		istioctlParams = ""
+		prerelease     = "-beta.2"
+		istioctlParams = "" +
+			" --set values.pilot.image=docker.io/jrajahalme/istio_pilot:1.6.14-beta.2" +
+			" --set values.global.proxy.image=docker.io/jrajahalme/istio_proxy:1.6.14-beta.2" +
+			" --set values.global.proxy_init.image=docker.io/jrajahalme/istio_proxy:1.6.14-beta.2"
+
 		// Keeping these here in comments serve multiple purposes:
 		// - remind how to test with prerelease images in future
 		// - cause CI infra to prepull these images so that they do not
 		//   need to be pulled on demand during the test
-		// " --set values.pilot.image=docker.io/cilium/istio_pilot:1.5.9" +
-		// " --set values.proxy.image=docker.io/cilium/istio_proxy:1.5.9" +
-		// " --set values.proxy_init.image=docker.io/cilium/istio_proxy:1.5.9"
+		// " --set values.pilot.image=docker.io/cilium/istio_pilot:1.6.14" +
+		// " --set values.global.proxy.image=docker.io/cilium/istio_proxy:1.6.14" +
+		// " --set values.global.proxy_init.image=docker.io/cilium/istio_proxy:1.6.14" +
+		// " --set values.global.proxy.logLevel=trace"
+		// " --set values.global.proxy.logLevel=debug"
+		// " --set values.global.mtls.auto=false"
+		// " --set values.global.logging.level=debug"
 		ciliumOptions = map[string]string{
-			// "proxy.sidecarImageRegex": "jrajahalme/istio_proxy",
+			"proxy.sidecarImageRegex": "jrajahalme/istio_proxy",
+			//"kubeProxyReplacement": "disabled",
+			//"debug.enabled": "true",
+			//"debug.verbose": "flow",
 		}
 
-		// Map of tested runtimes for cilium-istioctl
+		// Map for tested cilium-istioctl release targets if not GOOS-GORACH
 		ciliumIstioctlOSes = map[string]string{
-			"darwin": "osx",
-			"linux":  "linux",
+			"darwin-amd64": "osx",
 		}
 
 		// istioServiceNames is the set of Istio services needed for the tests
 		istioServiceNames = []string{
 			"istio-ingressgateway",
-			"istio-pilot",
+			"istiod",
 		}
 
 		// wgetCommand is the command used in this test because the Istio apps
@@ -88,12 +96,15 @@ var _ = SkipContextIf(func() bool {
 		kubectl = helpers.CreateKubectl(helpers.K8s1VMName(), logger)
 
 		By("Downloading cilium-istioctl")
-		os := "linux"
+		kind := "linux-amd64"
 		if kubectl.IsLocal() {
-			// Use Ginkgo runtime OS instead when commands are executed in the local Ginkgo host
-			os = ciliumIstioctlOSes[runtime.GOOS]
+			// Use Ginkgo runtime OS-ARCH instead when commands are executed in the local Ginkgo host
+			kind = runtime.GOOS + "-" + runtime.GOARCH
+			if other, mapped := ciliumIstioctlOSes[kind]; mapped {
+				kind = other
+			}
 		}
-		ciliumIstioctlURL := "https://github.com/cilium/istio/releases/download/" + istioVersion + prerelease + "/cilium-istioctl-" + istioVersion + "-" + os + ".tar.gz"
+		ciliumIstioctlURL := "https://github.com/cilium/istio/releases/download/" + istioVersion + prerelease + "/cilium-istioctl-" + istioVersion + "-" + kind + ".tar.gz"
 		res := kubectl.Exec(helpers.CurlWithRetries(fmt.Sprintf("curl -L %s | tar xz", ciliumIstioctlURL), 5, false))
 		res.ExpectSuccess("unable to download %s", ciliumIstioctlURL)
 		res = kubectl.ExecShort("./cilium-istioctl version")
@@ -180,7 +191,7 @@ var _ = SkipContextIf(func() bool {
 
 	// This is a subset of Services's "Bookinfo Demo" test suite, with the pods
 	// injected with Istio sidecar proxies and Istio mTLS enabled.
-	SkipContextIf(func() bool { return ciliumIstioctlOSes[runtime.GOOS] == "" }, "Istio Bookinfo Demo", func() {
+	Context("Istio Bookinfo Demo", func() {
 
 		var (
 			resourceYAMLPaths []string

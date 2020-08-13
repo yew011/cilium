@@ -1318,9 +1318,9 @@ func (kub *Kubectl) WaitforPods(namespace string, filter string, timeout time.Du
 // the aforementioned desired state within timeout seconds. Returns false and
 // an error if the command failed or the timeout was exceeded.
 func (kub *Kubectl) WaitForSinglePod(namespace, filter string, timeout time.Duration) error {
-	ginkgoext.By("WaitforPods(namespace=%q, filter=%q)", namespace, filter)
-	err := kub.waitForSinglePod(checkReady, namespace, filter, timeout)
-	ginkgoext.By("WaitforPods(namespace=%q, filter=%q) => %v", namespace, filter, err)
+	ginkgoext.By("WaitForSinglePod(namespace=%q, filter=%q)", namespace, filter)
+	err := kub.waitForNPods(checkReady, namespace, filter, 1, timeout)
+	ginkgoext.By("waitForNPods(namespace=%q, filter=%q, minRequired=1) => %v", namespace, filter, err)
 	if err != nil {
 		desc := kub.ExecShort(fmt.Sprintf("%s describe pods -n %s %s", KubectlCmd, namespace, filter))
 		ginkgoext.By(desc.GetDebugMessage())

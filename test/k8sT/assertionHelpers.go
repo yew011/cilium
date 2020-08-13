@@ -59,7 +59,7 @@ func ExpectCiliumNotRunning(vm *helpers.Kubectl) {
 // the error returned by that function is nil.
 func ExpectCiliumOperatorReady(vm *helpers.Kubectl) {
 	By("Waiting for cilium-operator to be ready")
-	err := vm.WaitforPods(helpers.CiliumNamespace, "-l name=cilium-operator", longTimeout)
+	err := vm.WaitForSinglePod(helpers.CiliumNamespace, "-l name=cilium-operator", longTimeout)
 	ExpectWithOffset(1, err).Should(BeNil(), "Cilium operator was not able to get into ready state")
 }
 

@@ -29,26 +29,26 @@ Step 2: Install cilium-istioctl
 
    Make sure that Cilium is running in your cluster before proceeding.
 
-Download the `cilium enhanced istioctl version 1.5.9 <https://github.com/cilium/istio/releases/tag/1.5.9>`_:
+Download the `cilium enhanced istioctl version 1.6.14 <https://github.com/cilium/istio/releases/tag/1.6.14>`_:
 
 .. tabs::
   .. group-tab:: Linux
 
     .. parsed-literal::
 
-     curl -L https://github.com/cilium/istio/releases/download/1.5.9/cilium-istioctl-1.5.9-linux.tar.gz | tar xz
+     curl -L https://github.com/cilium/istio/releases/download/1.6.14/cilium-istioctl-1.6.14-linux-amd64.tar.gz | tar xz
 
   .. group-tab:: OSX
 
     .. parsed-literal::
 
-     curl -L https://github.com/cilium/istio/releases/download/1.5.9/cilium-istioctl-1.5.9-osx.tar.gz | tar xz
+     curl -L https://github.com/cilium/istio/releases/download/1.6.14/cilium-istioctl-1.6.14-osx.tar.gz | tar xz
 
 .. note::
 
    Cilium integration, as presented in this Getting Started Guide, has
-   been tested with Kubernetes releases 1.14, 1.15, 1.16, 1.17, and
-   1.18. Note that this does *not* work with K8s 1.13.
+   been tested with Kubernetes releases 1.14, 1.15, 1.16, 1.17, 1.18,
+   and 1.19. Note that this does *not* work with K8s 1.13.
 
 Deploy the default Istio configuration profile onto Kubernetes:
 
