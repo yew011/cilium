@@ -8,6 +8,7 @@ include ../Makefile.defs
 SUBDIRS = sockops
 
 BPF_SIMPLE = bpf_network.o bpf_alignchecker.o
+BPF_TEST=bpf/tests/bpf_ct_tests.c
 BPF = bpf_lxc.o bpf_overlay.o bpf_sock.o bpf_host.o bpf_xdp.o $(BPF_SIMPLE)
 
 TARGET=cilium-map-migrate cilium-probe-kernel-hz
@@ -201,6 +202,14 @@ bpf_lxc.ll: bpf_lxc.c $(LIB)
 	$(QUIET) ${CLANG} ${MAX_LXC_OPTIONS} ${CLANG_FLAGS} -c $< -o $@
 
 bpf_lxc.o: bpf_lxc.ll
+	@$(ECHO_CC)
+	$(QUIET) ${LLC} ${LLC_FLAGS} -filetype=obj -o $@ $(patsubst %.o,%.ll,$@)
+
+tests/bpf_ct_tests.ll: tests/bpf_ct_tests.c $(LIB)
+	@$(ECHO_CC)
+	$(QUIET) ${CLANG} ${MAX_LXC_OPTIONS} ${CLANG_FLAGS} -c $< -o $@
+
+tests/bpf_ct_tests.o: tests/bpf_ct_tests.ll
 	@$(ECHO_CC)
 	$(QUIET) ${LLC} ${LLC_FLAGS} -filetype=obj -o $@ $(patsubst %.o,%.ll,$@)
 
