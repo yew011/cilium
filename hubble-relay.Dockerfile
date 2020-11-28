@@ -2,6 +2,10 @@
 #
 ARG BASE_IMAGE=scratch
 
+# Cross-compile go, FROM comment must right before the FROM line for
+# the parameter to be applied on BuildKit builds.
+#
+# FROM --platform=$BUILDPLATFORM
 FROM docker.io/library/golang:1.15.6 as builder
 ARG CILIUM_SHA=""
 LABEL cilium-sha=${CILIUM_SHA}
@@ -10,7 +14,8 @@ WORKDIR /go/src/github.com/cilium/cilium/hubble-relay
 ARG NOSTRIP
 ARG LOCKDEBUG
 ARG RACE
-RUN make RACE=${RACE} NOSTRIP=${NOSTRIP} LOCKDEBUG=${LOCKDEBUG}
+ARG TARGETARCH
+RUN make GOARCH=${TARGETARCH} RACE=${RACE} NOSTRIP=${NOSTRIP} LOCKDEBUG=${LOCKDEBUG}
 WORKDIR /go/src/github.com/cilium/cilium
 RUN make licenses-all
 

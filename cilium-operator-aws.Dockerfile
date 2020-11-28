@@ -2,6 +2,10 @@
 #
 ARG BASE_IMAGE=scratch
 
+# Cross-compile go, FROM comment must right before the FROM line for
+# the parameter to be applied on BuildKit builds.
+#
+# FROM --platform=$BUILDPLATFORM
 FROM docker.io/library/golang:1.15.6 as builder
 ARG CILIUM_SHA=""
 LABEL cilium-sha=${CILIUM_SHA}
@@ -13,9 +17,12 @@ WORKDIR /go/src/github.com/cilium/cilium/operator
 ARG NOSTRIP
 ARG LOCKDEBUG
 ARG RACE
-RUN make NOSTRIP=$NOSTRIP LOCKDEBUG=$LOCKDEBUG RACE=$RACE cilium-operator-aws
+# TARGETARCH is an automatic platform ARG enabled by Docker BuildKit.
+#
+ARG TARGETARCH
+RUN make GOARCH=$TARGETARCH NOSTRIP=$NOSTRIP LOCKDEBUG=$LOCKDEBUG RACE=$RACE cilium-operator-aws
 WORKDIR /go/src/github.com/cilium/cilium
-RUN make licenses-all
+RUN make GOARCH=$TARGETARCH licenses-all
 
 FROM docker.io/library/alpine:3.12.0 as certs
 ARG CILIUM_SHA=""
