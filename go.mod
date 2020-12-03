@@ -14,6 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v0.24.0
 	github.com/blang/semver/v4 v4.0.0
 	github.com/cilium/arping v1.0.1-0.20201126164629-5142c9527af5
+	github.com/cilium/customvet v0.0.0-20201209211516-9852765c1ac4
 	github.com/cilium/deepequal-gen v0.0.0-20200406125435-ad6a9003139e
 	github.com/cilium/ebpf v0.3.0
 	github.com/cilium/ipam v0.0.0-20201020084809-76717fcdb3a2
@@ -76,10 +77,10 @@ require (
 	go.uber.org/goleak v1.0.0
 	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0
 	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b
-	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
+	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/sys v0.0.0-20201207223542-d4d67f95c62d
 	golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e
-	golang.org/x/tools v0.0.0-20200616195046-dc31b401abb5
+	golang.org/x/tools v0.0.0-20201208233053-a543418bbed2
 	google.golang.org/genproto v0.0.0-20201110150050-8816d57aaa9a
 	google.golang.org/grpc v1.29.1
 	google.golang.org/protobuf v1.25.0
