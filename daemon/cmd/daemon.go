@@ -42,7 +42,7 @@ import (
 	"github.com/cilium/cilium/pkg/endpointmanager"
 	"github.com/cilium/cilium/pkg/envoy"
 	"github.com/cilium/cilium/pkg/fqdn"
-	"github.com/cilium/cilium/pkg/hubble/observer"
+	"github.com/cilium/cilium/pkg/hubble/observer2"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
 	"github.com/cilium/cilium/pkg/identity/identitymanager"
@@ -151,7 +151,7 @@ type Daemon struct {
 	// endpoint's routing in ENI or Azure IPAM mode
 	healthEndpointRouting *linuxrouting.RoutingInfo
 
-	hubbleObserver *observer.LocalObserverServer
+	hubbleObserver *observer2.LocalObserverServer
 
 	// k8sCachesSynced is closed when all essential Kubernetes caches have
 	// been fully synchronized

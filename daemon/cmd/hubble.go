@@ -26,12 +26,9 @@ import (
 	observerpb "github.com/cilium/cilium/api/v1/observer"
 	"github.com/cilium/cilium/pkg/crypto/certloader"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
-	"github.com/cilium/cilium/pkg/hubble/container"
-	"github.com/cilium/cilium/pkg/hubble/math"
 	"github.com/cilium/cilium/pkg/hubble/metrics"
 	"github.com/cilium/cilium/pkg/hubble/monitor"
-	"github.com/cilium/cilium/pkg/hubble/observer"
-	"github.com/cilium/cilium/pkg/hubble/observer/observeroption"
+	"github.com/cilium/cilium/pkg/hubble/observer2"
 	"github.com/cilium/cilium/pkg/hubble/parser"
 	"github.com/cilium/cilium/pkg/hubble/peer"
 	"github.com/cilium/cilium/pkg/hubble/peer/serviceoption"
@@ -114,20 +111,12 @@ func (d *Daemon) launchHubble() {
 		return
 	}
 
-	maxFlows, err := getHubbleEventBufferCapacity(logger)
-	if err != nil {
-		logger.WithError(err).Error("Specified capacity for Hubble events buffer is invalid")
-		return
-	}
-
-	d.hubbleObserver, err = observer.NewLocalServer(payloadParser, logger,
-		observeroption.WithMaxFlows(maxFlows),
-		observeroption.WithMonitorBuffer(option.Config.HubbleEventQueueSize),
-		observeroption.WithCiliumDaemon(d))
-	if err != nil {
-		logger.WithError(err).Error("Failed to initialize Hubble")
-		return
-	}
+	d.hubbleObserver = observer2.NewLocalObserverServer(
+		observer2.WithEventQueueSize(option.Config.HubbleEventQueueSize),
+		observer2.WithLogger(logger),
+		observer2.WithMaxFlows(option.Config.HubbleFlowBufferSize),
+		observer2.WithPayloadParser(payloadParser),
+	)
 	go d.hubbleObserver.Start()
 	d.monitorAgent.RegisterNewConsumer(monitor.NewConsumer(d.hubbleObserver))
 
@@ -341,25 +330,4 @@ func (d *Daemon) LookupSecIDByIP(ip net.IP) (id ipcache.Identity, ok bool) {
 // should only be used for reading.
 func (d *Daemon) GetK8sStore(name string) k8scache.Store {
 	return d.k8sWatcher.GetStore(name)
-}
-
-// getHubbleEventBufferCapacity returns the user configured capacity for
-// Hubble's events buffer. The deprecated flag hubble-flow-buffer-size is
-// evaluated if greater than 0, otherwise the new flag
-// hubble-event-buffer-capacity is used instead.
-func getHubbleEventBufferCapacity(logger logrus.FieldLogger) (container.Capacity, error) {
-	// check deprecated old flag for compatibility
-	// TODO: remove support for HubbleFlowBufferSize once 1.11 is out
-	if option.Config.HubbleFlowBufferSize > 0 {
-		logger.Warningf("Option '%s' is deprecated and will be removed in Cilium 1.11", option.HubbleFlowBufferSize)
-		c, err := container.NewCapacity(option.Config.HubbleFlowBufferSize)
-		if err == nil {
-			return c, nil
-		}
-		// old flag behavior was to silently round up the buffer capacity to a
-		// valid value (eg: 1500 -> 2047, 5000 -> 8191, etc) so adjust provided
-		// value to the nearest valid one for compatibility purpose
-		return container.NewCapacity((1<<math.MSB(uint64(option.Config.HubbleFlowBufferSize)) - 1))
-	}
-	return container.NewCapacity(option.Config.HubbleEventBufferCapacity)
 }
