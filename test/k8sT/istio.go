@@ -41,9 +41,11 @@ var _ = Describe("K8sIstioTest", func() {
 		// Modifiers for pre-release testing, normally empty
 		prerelease     = "-beta.2"
 		istioctlParams = "" +
-			" --set values.pilot.image=docker.io/jrajahalme/istio_pilot:1.6.14-beta.2" +
-			" --set values.global.proxy.image=docker.io/jrajahalme/istio_proxy:1.6.14-beta.2" +
-			" --set values.global.proxy_init.image=docker.io/jrajahalme/istio_proxy:1.6.14-beta.2"
+			" --set values.pilot.image=docker.io/jrajahalme/istio_pilot:1.6.14-beta.6" +
+			" --set values.global.proxy.image=docker.io/jrajahalme/istio_proxy:1.6.14-beta.6-1" +
+			" --set values.global.proxy_init.image=docker.io/jrajahalme/istio_proxy:1.6.14-beta.6-1" +
+			" --set values.global.proxy.logLevel=debug" +
+			" --set values.global.logging.level=debug"
 
 		// Keeping these here in comments serve multiple purposes:
 		// - remind how to test with prerelease images in future
@@ -53,14 +55,12 @@ var _ = Describe("K8sIstioTest", func() {
 		// " --set values.global.proxy.image=docker.io/cilium/istio_proxy:1.6.14" +
 		// " --set values.global.proxy_init.image=docker.io/cilium/istio_proxy:1.6.14" +
 		// " --set values.global.proxy.logLevel=trace"
-		// " --set values.global.proxy.logLevel=debug"
 		// " --set values.global.mtls.auto=false"
-		// " --set values.global.logging.level=debug"
 		ciliumOptions = map[string]string{
 			"proxy.sidecarImageRegex": "jrajahalme/istio_proxy",
 			//"kubeProxyReplacement": "disabled",
-			//"debug.enabled": "true",
-			//"debug.verbose": "flow",
+			"debug.enabled": "true",
+			"debug.verbose": "flow",
 		}
 
 		// Map for tested cilium-istioctl release targets if not GOOS-GORACH
@@ -74,9 +74,10 @@ var _ = Describe("K8sIstioTest", func() {
 			"istiod",
 		}
 
-		// wgetCommand is the command used in this test because the Istio apps
+		// wgetCommand is the command used in this test because some of the Istio apps
 		// do not provide curl.
 		wgetCommand = fmt.Sprintf("wget --tries=2 --connect-timeout %d", helpers.CurlConnectTimeout)
+		curlCommand = fmt.Sprintf("curl --retry 2 --retry-connrefused --connect-timeout %d", helpers.CurlConnectTimeout)
 
 		kubectl      *helpers.Kubectl
 		uptimeCancel context.CancelFunc
@@ -105,7 +106,7 @@ var _ = Describe("K8sIstioTest", func() {
 			}
 		}
 		ciliumIstioctlURL := "https://github.com/cilium/istio/releases/download/" + istioVersion + prerelease + "/cilium-istioctl-" + istioVersion + "-" + kind + ".tar.gz"
-		res := kubectl.Exec(helpers.CurlWithRetries(fmt.Sprintf("curl -L %s | tar xz", ciliumIstioctlURL), 5, false))
+		res := kubectl.Exec(fmt.Sprintf("curl -s -L %s | tar xz", ciliumIstioctlURL))
 		res.ExpectSuccess("unable to download %s", ciliumIstioctlURL)
 		res = kubectl.ExecShort("./cilium-istioctl version")
 		res.ExpectSuccess("unable to execute cilium-istioctl")
@@ -224,6 +225,19 @@ var _ = Describe("K8sIstioTest", func() {
 			return true
 		}
 
+		// shouldCurlConnect checks that srcPod can connect to dstURI.
+		shouldCurlConnect := func(srcPod, srcContainer, dstURI string) bool {
+			cmd := fmt.Sprintf("%s -v %s", curlCommand, dstURI)
+			By("Checking that %q can connect to %q", srcPod, dstURI)
+			res := kubectl.ExecPodContainerCmd(
+				helpers.DefaultNamespace, srcPod, srcContainer, cmd)
+			if !res.WasSuccessful() {
+				GinkgoPrint("Unable to connect from %q to %q: %s", srcPod, dstURI, res.OutputPrettyPrint())
+				return false
+			}
+			return true
+		}
+
 		// shouldNotConnect checks that srcPod cannot connect to dstURI.
 		shouldNotConnect := func(srcPod, srcContainer, dstURI string) bool {
 			By("Checking that %q cannot connect to %q", srcPod, dstURI)
@@ -261,6 +275,31 @@ var _ = Describe("K8sIstioTest", func() {
 				return fmt.Sprintf("%s/%s", target, resource)
 			}
 			return target
+		}
+
+		// formatLocalAPI is a helper function which formats a URI to access.
+		formatLocalAPI := func(port, resource string) string {
+			target := fmt.Sprintf("http://127.0.0.1:%s", port)
+			if resource != "" {
+				return fmt.Sprintf("%s/%s", target, resource)
+			}
+			return target
+		}
+
+		outbound := "outbound"
+		inbound := "inbound"
+
+		// shouldHaveService checks that srcPod has service properly configured.
+		shouldHaveService := func(pod, service, port, direction string) bool {
+			target := fmt.Sprintf("%s.%s.svc.cluster.local", service, helpers.DefaultNamespace)
+
+			By("Checking that Istio proxy config at %q has service %q on port %q for %q", pod, target, port, direction)
+			res := kubectl.Exec(fmt.Sprintf(`./cilium-istioctl proxy-config cluster %s | grep "%s.*%s.*%s"`, pod, target, port, direction))
+			if !res.WasSuccessful() {
+				GinkgoPrint("Service %q not configured at %q", target, pod)
+				return false
+			}
+			return true
 		}
 
 		It("Tests bookinfo inter-service connectivity", func() {
@@ -327,12 +366,50 @@ var _ = Describe("K8sIstioTest", func() {
 				Expect(err).To(BeNil(), "DNS entry is not ready after timeout")
 			}
 
-			By("Testing L7 filtering")
+			By("Testing Istio service configuration")
 			reviewsPodV1, err := kubectl.GetPods(helpers.DefaultNamespace, formatLabelArgument(app, reviews, version, v1)).Filter(podNameFilter)
 			Expect(err).Should(BeNil(), "Cannot get reviewsV1 pods")
+			ratingsPodV1, err := kubectl.GetPods(helpers.DefaultNamespace, formatLabelArgument(app, ratings, version, v1)).Filter(podNameFilter)
+			Expect(err).Should(BeNil(), "Cannot get ratingsV1 pods")
+			detailsPodV1, err := kubectl.GetPods(helpers.DefaultNamespace, formatLabelArgument(app, details, version, v1)).Filter(podNameFilter)
+			Expect(err).Should(BeNil(), "Cannot get detailsV1 pods")
 			productpagePodV1, err := kubectl.GetPods(helpers.DefaultNamespace, formatLabelArgument(app, productPage, version, v1)).Filter(podNameFilter)
 			Expect(err).Should(BeNil(), "Cannot get productpageV1 pods")
 
+			err = helpers.WithTimeout(func() bool {
+				allGood := true
+
+				allGood = shouldHaveService(reviewsPodV1.String(), ratings, apiPort, outbound) && allGood
+				allGood = shouldHaveService(ratingsPodV1.String(), ratings, apiPort, inbound) && allGood
+				allGood = shouldHaveService(productpagePodV1.String(), details, apiPort, outbound) && allGood
+				allGood = shouldHaveService(detailsPodV1.String(), details, apiPort, inbound) && allGood
+				allGood = shouldHaveService(productpagePodV1.String(), ratings, apiPort, outbound) && allGood
+
+				return allGood
+			}, "Istio sidecar proxies are not configured", &helpers.TimeoutConfig{Timeout: helpers.HelperTimeout})
+			Expect(err).Should(BeNil(), "Cannot configure Istio sidecar proxies")
+
+			By("Testing service local access")
+
+			err = helpers.WithTimeout(func() bool {
+				allGood := true
+
+				allGood = shouldConnect(reviewsPodV1.String(), "reviews", formatLocalAPI(apiPort, health)) && allGood
+				allGood = shouldCurlConnect(ratingsPodV1.String(), "ratings", formatLocalAPI(apiPort, health)) && allGood
+				allGood = shouldCurlConnect(ratingsPodV1.String(), "ratings", formatLocalAPI(apiPort, ratingsPath)) && allGood
+				allGood = shouldCurlConnect(ratingsPodV1.String(), "istio-proxy", formatLocalAPI(apiPort, health)) && allGood
+
+				allGood = shouldCurlConnect(detailsPodV1.String(), "istio-proxy", formatLocalAPI(apiPort, health)) && allGood
+				allGood = shouldConnect(productpagePodV1.String(), "productpage", formatLocalAPI(apiPort, health)) && allGood
+
+				return allGood
+			}, "Istio services are not reachable", &helpers.TimeoutConfig{Timeout: helpers.HelperTimeout})
+			Expect(err).Should(BeNil(), "Cannot reach Istio services")
+
+			//shouldConnect(reviewsPodV1.String(), "reviews", formatAPI(ratings, apiPort, health))
+			//helpers.HoldEnvironment("Pausing test for debugging...")
+
+			By("Testing L7 filtering")
 			// Connectivity checks often need to be repeated because Pilot
 			// is eventually consistent, i.e. it may take some time for a
 			// sidecar proxy to get updated with the configuration for another
@@ -350,8 +427,8 @@ var _ = Describe("K8sIstioTest", func() {
 				allGood = shouldNotConnect(productpagePodV1.String(), "productpage", formatAPI(ratings, apiPort, ratingsPath)) && allGood
 
 				return allGood
-			}, "Istio sidecar proxies are not configured", &helpers.TimeoutConfig{Timeout: helpers.HelperTimeout})
-			Expect(err).Should(BeNil(), "Cannot configure Istio sidecar proxies")
+			}, "Istio sidecar proxies are not reachable", &helpers.TimeoutConfig{Timeout: helpers.HelperTimeout})
+			Expect(err).Should(BeNil(), "Cannot reach Istio sidecar proxies")
 		})
 	})
 })
