@@ -264,6 +264,7 @@ func (s *LocalObserverServer) GetFlows(
 		}
 		return err
 	}
+	defer ringReader.Close()
 	flowsReader, err := newFlowsReader(ringReader, req, log, whitelist, blacklist)
 	if err != nil {
 		return err
@@ -450,6 +451,7 @@ func newRingReader(ring *container.Ring, req *observerpb.GetFlowsRequest, whitel
 
 	idx := ring.LastWriteParallel()
 	reader := container.NewRingReader(ring, idx)
+	defer reader.Close()
 
 	var flowsCount uint64
 	// We need to find out what the right index is; that is the index with the
