@@ -264,7 +264,10 @@ func (s *LocalObserverServer) GetFlows(
 		}
 		return err
 	}
-	defer ringReader.Close()
+	defer func() {
+		cancel()
+		ringReader.Close()
+	}()
 	flowsReader, err := newFlowsReader(ringReader, req, log, whitelist, blacklist)
 	if err != nil {
 		return err
