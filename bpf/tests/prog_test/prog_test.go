@@ -75,8 +75,7 @@ func mapDeleteAll(m *ebpf.Map) error {
 			break
 		}
 
-		err = m.Delete(key)
-		if err != nil {
+		if err := m.Delete(key); err != nil {
 			return err
 		}
 	}
@@ -384,8 +383,7 @@ func testCt4Rst(spec *ebpf.Collection) error {
 	if !reflect.DeepEqual(bufOut, packetSyn.Bytes()) {
 		return errors.New("unexpected data modification")
 	}
-	err = dumpDebugMessages(eventsReader)
-	if err != nil {
+	if err := dumpDebugMessages(eventsReader); err != nil {
 		return fmt.Errorf("dumpDebugMessages failed: %v", err)
 	}
 	bpfCt, err := ct4TcpMapFromBPF(bpfCtMap)
@@ -410,8 +408,7 @@ func testCt4Rst(spec *ebpf.Collection) error {
 	if err != nil {
 		return fmt.Errorf("test run failed: %v", err)
 	}
-	err = dumpDebugMessages(eventsReader)
-	if err != nil {
+	if err := dumpDebugMessages(eventsReader); err != nil {
 		return fmt.Errorf("dumpDebugMessages failed: %v", err)
 	}
 	bpfCt, err = ct4TcpMapFromBPF(bpfCtMap)
@@ -494,8 +491,7 @@ func TestMain(m *testing.M) {
 		Cur: unix.RLIM_INFINITY,
 		Max: unix.RLIM_INFINITY,
 	}
-	err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &lim)
-	if err != nil {
+	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &lim); err != nil {
 		log.Fatalf("setrlimit: %v", err)
 	}
 	os.Exit(m.Run())
