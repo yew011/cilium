@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+// NB: leave this out from the CI for now.
+// +build noci
+
+package bpfprogtester
 
 import (
 	"bytes"
@@ -23,8 +26,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"reflect"
 	"strings"
+	"testing"
 
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/byteorder"
@@ -114,7 +119,7 @@ func testNop(spec *ebpf.Collection) error {
 func testMap(spec *ebpf.Collection) error {
 	prog := spec.Programs["test_map"]
 	if prog == nil {
-		return errors.New("did not find test_nop program")
+		return errors.New("did not find test_map program")
 	}
 
 	bpfCtMap := spec.Maps["test_cilium_ct_tcp4_65535"]
@@ -446,8 +451,45 @@ func testCt4Rst(spec *ebpf.Collection) error {
 	return nil
 }
 
-func main() {
+// TestCt checks connection tracking
+func TestCt(t *testing.T) {
 
+	objDir := ".."
+	fname := path.Join(objDir, "bpf_ct_tests.o")
+	fnamePatched := path.Join(objDir, "bpf_ct_tests_patched.o")
+	err := patchElf(fname, fnamePatched)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	coll, err := ebpf.LoadCollection(fnamePatched)
+	if err != nil {
+		t.Fatalf("failed to load %s: %s", fnamePatched, err)
+	}
+
+	t.Run("Nop test", func(t *testing.T) {
+		err := testNop(coll)
+		if err != nil {
+			t.Fatalf("test failed: %s", err)
+		}
+	})
+
+	t.Run("Map test", func(t *testing.T) {
+		err := testMap(coll)
+		if err != nil {
+			t.Fatalf("test failed: %s", err)
+		}
+	})
+
+	t.Run("RST handling", func(t *testing.T) {
+		err := testCt4Rst(coll)
+		if err != nil {
+			t.Fatalf("test failed: %s", err)
+		}
+	})
+}
+
+func TestMain(m *testing.M) {
 	lim := unix.Rlimit{
 		Cur: unix.RLIM_INFINITY,
 		Max: unix.RLIM_INFINITY,
@@ -456,42 +498,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("setrlimit: %v", err)
 	}
-
-	fname := "bpf_ct_tests.o"
-	fnamePatched := "bpf_ct_tests_patched.o"
-	err = patchElf(fname, fnamePatched)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	coll, err := ebpf.LoadCollection(fnamePatched)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"filename": fnamePatched,
-		}).Fatalf("failed to load: %s\n", err)
-	}
-
-	err = testNop(coll)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"test":  "nop",
-			"error": err,
-		}).Fatal("test failed")
-	}
-
-	err = testMap(coll)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"test":  "map",
-			"error": err,
-		}).Fatal("test failed")
-	}
-
-	err = testCt4Rst(coll)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"test":  "map",
-			"error": err,
-		}).Fatal("test failed")
-	}
+	os.Exit(m.Run())
 }
