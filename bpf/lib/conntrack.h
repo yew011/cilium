@@ -80,6 +80,8 @@ static __always_inline __u32 __ct_update_timeout(struct ct_entry *entry,
 #ifdef NEEDS_TIMEOUT
 	WRITE_ONCE(entry->lifetime, now + lifetime);
 #endif
+
+	relax_verifier();
 	if (dir == CT_INGRESS) {
 		accumulated_flags = READ_ONCE(entry->rx_flags_seen);
 		last_report = READ_ONCE(entry->last_rx_report);
@@ -208,8 +210,6 @@ static __always_inline __u8 __ct_lookup(const void *map, struct __ctx_buff *ctx,
 {
 	struct ct_entry *entry;
 	int reopen;
-
-	relax_verifier();
 
 	entry = map_lookup_elem(map, tuple);
 	if (entry) {
@@ -670,8 +670,6 @@ static __always_inline int ct_lookup4(const void *map,
 		goto out;
 	}
 
-	relax_verifier();
-
 	/* Lookup entry in forward direction */
 	if (dir != CT_SERVICE) {
 		ipv4_ct_tuple_reverse(tuple);
@@ -818,6 +816,8 @@ static __always_inline int ct_create4(const void *map_main,
 	struct ct_entry entry = { };
 	bool is_tcp = tuple->nexthdr == IPPROTO_TCP;
 	union tcp_flags seen_flags = { .value = 0 };
+
+	relax_verifier();
 
 	/* Note if this is a proxy connection so that replies can be redirected
 	 * back to the proxy.
