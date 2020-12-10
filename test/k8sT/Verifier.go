@@ -17,6 +17,7 @@ package k8sTest
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	. "github.com/cilium/cilium/test/ginkgo-ext"
 	"github.com/cilium/cilium/test/helpers"
@@ -96,7 +97,8 @@ var _ = Describe("K8sVerifier", func() {
 		By("Building BPF objects from the tree")
 		res := kubectl.ExecPodCmd(helpers.DefaultNamespace, podName, "make -C bpf V=0")
 		res.ExpectSuccess("Expected compilation of the BPF objects to succeed")
-		res = kubectl.ExecPodCmd(helpers.DefaultNamespace, podName, "make -C tools/maptool/")
+		timeout := 10 * time.Minute
+		res = kubectl.ExecPodCmd(helpers.DefaultNamespace, podName, "make -C tools/maptool/", helpers.ExecOptions{Timeout: &timeout})
 		res.ExpectSuccess("Expected compilation of maptool to succeed")
 
 		if helpers.RunsOn419Kernel() {
