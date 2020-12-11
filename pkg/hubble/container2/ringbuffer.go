@@ -31,9 +31,9 @@ import (
 // Written events are given sequence numbers in the order in which they are
 // received.
 type RingBuffer struct {
-	// rwMutex synchronizes access. It is included as a field rather than
-	// embedded so that its methods are not exported.
-	rwMutex sync.RWMutex
+	// mu synchronizes access. It is included as an unexported field rather than
+	// embedded struct so that its methods are not exported.
+	mu sync.RWMutex
 
 	// tail is the sequence number of the oldest event in the buffer.
 	tail int
@@ -102,9 +102,9 @@ func (b *RingBuffer) Buffer(events []*v1.Event) []*v1.Event {
 		return events[:0]
 	}
 
-	b.rwMutex.RLock()
+	b.mu.RLock()
 	if b.tail == b.head {
-		b.rwMutex.RUnlock()
+		b.mu.RUnlock()
 		return nil
 	}
 	if cap(events) < len(b.buffer) {
@@ -120,7 +120,7 @@ func (b *RingBuffer) Buffer(events []*v1.Event) []*v1.Event {
 		copy(events[0:len(b.buffer)-headIndex], b.buffer[tailIndex:len(b.buffer)])
 		copy(events[len(b.buffer)-headIndex:], b.buffer[0:headIndex])
 	}
-	b.rwMutex.RUnlock()
+	b.mu.RUnlock()
 	return events
 }
 
@@ -131,10 +131,83 @@ func (b *RingBuffer) ReadAll(capacity int) (<-chan *v1.Event, ReaderCancelFunc) 
 		return b.ReadNew(capacity)
 	}
 
-	b.rwMutex.RLock()
+	b.mu.RLock()
 	seq := b.tail
-	b.rwMutex.RUnlock()
-	return b.readFrom(seq, capacity)
+	b.mu.RUnlock()
+	return b.ReadFrom(seq, capacity)
+}
+
+// ReadBackward returns a channel that returns all events in b starting from the
+// head and going backward in time, the head at the moment ReadBackward was
+// called, and a cancellation function. The returned head can be used in a call
+// to ReadFrom to read forward.
+func (b *RingBuffer) ReadBackward(capacity int) (<-chan *v1.Event, int, ReaderCancelFunc) {
+	ch := make(chan *v1.Event, capacity)
+
+	// Acquire a read lock.
+	b.mu.RLock()
+	head := b.head
+
+	// If the buffer is empty then we are done.
+	if head == b.tail {
+		b.mu.RUnlock()
+		close(ch)
+		return ch, head, func() ReaderStats {
+			return ReaderStats{}
+		}
+	}
+
+	// Copy the head event from the buffer so that it cannot be overwritten.
+	seq := head - 1
+	event := b.buffer[seq%len(b.buffer)]
+
+	// Release the read lock.
+	b.mu.RUnlock()
+
+	// Start a goroutine to send events from the ring buffer to the channel.
+	// Once all events in the ring buffer have been sent, close the channel.
+	cancelCh := make(chan struct{})
+	resultCh := make(chan ReaderStats)
+	go func() {
+		var readerStats ReaderStats
+		defer func() {
+			resultCh <- readerStats
+			close(resultCh)
+		}()
+
+		defer close(ch)
+
+		for {
+			select {
+			case <-cancelCh:
+				return
+			case ch <- event:
+				readerStats.Sent++
+				seq--
+
+				// Acquire a read lock.
+				b.mu.RLock()
+
+				// If we have reached the tail then we are done.
+				if seq < b.tail {
+					b.mu.RUnlock()
+					return
+				}
+
+				// Copy the next event from the ring buffer so that it cannot be
+				// overwritten.
+				event = b.buffer[seq%len(b.buffer)]
+
+				// Release the read lock.
+				b.mu.RUnlock()
+			}
+		}
+	}()
+
+	return ch, head, func() ReaderStats {
+		close(cancelCh)
+		return <-resultCh
+	}
 }
 
 // ReadCurrent returns a channel that returns all events in b and a cancellation
@@ -150,8 +223,9 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 		}
 	}
 
-	// Acquire a read lock.
-	b.rwMutex.RLock()
+	// Acquire a read lock. Note that if we start a goroutine to read events
+	// then this lock is released in the goroutine.
+	b.mu.RLock()
 
 	// Record the sequence numbers of the current events in the buffer.
 	seq := b.tail
@@ -159,7 +233,7 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 
 	// If the buffer is empty then we are done.
 	if seq == last {
-		b.rwMutex.RUnlock()
+		b.mu.RUnlock()
 		close(ch)
 		return ch, func() ReaderStats {
 			return ReaderStats{}
@@ -182,8 +256,8 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 
 		defer close(ch)
 
-		// Release the read lock.
-		b.rwMutex.RUnlock()
+		// Release the read lock that was acquired in the parent goroutine.
+		b.mu.RUnlock()
 
 		for {
 			// Send the event to the reader or wait for cancellation.
@@ -199,8 +273,8 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 					return
 				}
 
-				// Take a read lock.
-				b.rwMutex.RLock()
+				// Acquire a read lock.
+				b.mu.RLock()
 
 				// If the reader was slow then we might have dropped events from
 				// the ring buffer. Record the number of dropped events and
@@ -209,7 +283,7 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 					// If the last event we want is no longer in the ring buffer
 					// then we are done.
 					if last < b.tail {
-						b.rwMutex.RUnlock()
+						b.mu.RUnlock()
 						readerStats.Dropped += last - seq
 						return
 					}
@@ -224,7 +298,7 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 				event = b.buffer[seq%len(b.buffer)]
 
 				// Release the read lock.
-				b.rwMutex.RUnlock()
+				b.mu.RUnlock()
 			}
 		}
 	}()
@@ -235,101 +309,9 @@ func (b *RingBuffer) ReadCurrent(capacity int) (<-chan *v1.Event, ReaderCancelFu
 	}
 }
 
-// ReadNew returns a channel with the given capacity that sends events written
-// to b and a cancellation function. capacity should be zero (unbuffered) except
-// in special circumstances (testing). Events will be dropped if the reader of
-// the returned channel cannot keep up.
-//
-// FIXME how to make capacity only available to test code?
-func (b *RingBuffer) ReadNew(capacity int) (<-chan *v1.Event, ReaderCancelFunc) {
-	ch := make(chan *v1.Event, capacity)
-	b.rwMutex.Lock()
-	b.readers[ch] = &ReaderStats{}
-	b.rwMutex.Unlock()
-
-	return ch, func() ReaderStats {
-		b.rwMutex.Lock()
-		readerStats := *b.readers[ch]
-		delete(b.readers, ch)
-		b.rwMutex.Unlock()
-		close(ch)
-		return readerStats
-	}
-}
-
-// ReadSince returns a channel with capacity that returns all events since t and
-// a cancellation function. t is assumed to be in the past. If t is more recent
-// than the last event in the buffer then all new events are returned.
-func (b *RingBuffer) ReadSince(t time.Time, capacity int) (<-chan *v1.Event, ReaderCancelFunc) {
-	if b.zeroCapacity() {
-		return b.ReadNew(capacity)
-	}
-
-	b.rwMutex.RLock()
-	// If there are events in the buffer then scan backwards to find the first
-	// event before t and then return events after that event.
-	// FIXME replace this linear search with binary search
-	// FIXME can improve search by assuming that events are roughly evenly distributed
-	for seq := b.head - 1; seq >= b.tail; seq-- {
-		et := eventTime(b.buffer[seq%len(b.buffer)])
-		if !et.IsZero() && et.Before(t) {
-			b.rwMutex.RUnlock()
-			return b.readFrom(seq+1, capacity)
-		}
-	}
-	b.rwMutex.RUnlock()
-	return b.readFrom(0, capacity)
-}
-
-// Status returns the status of b.
-func (b *RingBuffer) Status() RingBufferStatus {
-	b.rwMutex.RLock()
-	s := RingBufferStatus{
-		NumEvents:  b.head - b.tail,
-		SeenEvents: b.head,
-	}
-	for i := b.tail; i < b.head; i++ {
-		if t := eventTime(b.buffer[i%len(b.buffer)]); !t.IsZero() {
-			s.OldestEventTime = t
-			break
-		}
-	}
-	for i := b.head - 1; i >= b.tail; i-- {
-		if t := eventTime(b.buffer[i%len(b.buffer)]); !t.IsZero() {
-			s.NewestEventTime = t
-			break
-		}
-	}
-	b.rwMutex.RUnlock()
-	return s
-}
-
-// Write writes event to r.
-func (b *RingBuffer) Write(event *v1.Event) {
-	b.rwMutex.Lock()
-	if len(b.buffer) > 0 {
-		b.buffer[b.head%len(b.buffer)] = event
-	}
-	b.head++
-	if b.tail < b.head-len(b.buffer) {
-		b.tail = b.head - len(b.buffer)
-	}
-	for ch, readerStats := range b.readers {
-		select {
-		case ch <- event:
-			b.sent++
-			readerStats.Sent++
-		default:
-			b.dropped++
-			readerStats.Dropped++
-		}
-	}
-	b.rwMutex.Unlock()
-}
-
-// readFrom returns a channel with the given capacity that returns events from r
+// ReadFrom returns a channel with the given capacity that returns events from r
 // from seq onwards and a cancellation function.
-func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancelFunc) {
+func (b *RingBuffer) ReadFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancelFunc) {
 	ch := make(chan *v1.Event, capacity)
 
 	// Start a goroutine to send events from the ring buffer to the channel.
@@ -343,7 +325,7 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 
 		for {
 			// Take a read lock.
-			b.rwMutex.RLock()
+			b.mu.RLock()
 
 			// Signal that the reader is ready after taking the read lock for
 			// the first time.
@@ -356,25 +338,25 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 			// follow mode.
 			if seq == b.head {
 				// Release the read lock and acquire the write lock.
-				b.rwMutex.RUnlock()
+				b.mu.RUnlock()
 				// FIXME find a way to eliminate this comparison in non-test
 				// code
 				if b.rUnlockLockFunc != nil {
 					b.rUnlockLockFunc()
 				}
-				b.rwMutex.Lock()
+				b.mu.Lock()
 				// Retry the test in case the state changed while the mutex was
 				// unlocked.
 				if seq == b.head {
 					// Add the reader (i.e. switch to follow mode) and terminate
 					// this goroutine.
 					b.readers[ch] = &readerStats
-					b.rwMutex.Unlock()
+					b.mu.Unlock()
 					return
 				}
 				// Otherwise, release the write lock and re-acquire a read lock.
-				b.rwMutex.Unlock()
-				b.rwMutex.RLock()
+				b.mu.Unlock()
+				b.mu.RLock()
 			}
 
 			// If the reader was slow then we might have dropped events from the
@@ -390,7 +372,7 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 			event := b.buffer[seq%len(b.buffer)]
 
 			// Release the read lock.
-			b.rwMutex.RUnlock()
+			b.mu.RUnlock()
 
 			// Send the event to the reader or wait for cancellation.
 			select {
@@ -414,12 +396,12 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 		close(doneCh)
 
 		// Stop the follower if we have switched to follow mode.
-		b.rwMutex.Lock()
+		b.mu.Lock()
 		readerStats, ok := b.readers[ch]
 		if ok {
 			delete(b.readers, ch)
 		}
-		b.rwMutex.Unlock()
+		b.mu.Unlock()
 
 		// If we were in follow mode then return the stats.
 		if ok {
@@ -429,6 +411,98 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 		// Otherwise return the stats from the goroutine.
 		return <-resultCh
 	}
+}
+
+// ReadNew returns a channel with the given capacity that sends events written
+// to b and a cancellation function. capacity should be zero (unbuffered) except
+// in special circumstances (testing). Events will be dropped if the reader of
+// the returned channel cannot keep up.
+//
+// FIXME how to make capacity only available to test code?
+func (b *RingBuffer) ReadNew(capacity int) (<-chan *v1.Event, ReaderCancelFunc) {
+	ch := make(chan *v1.Event, capacity)
+	b.mu.Lock()
+	b.readers[ch] = &ReaderStats{}
+	b.mu.Unlock()
+
+	return ch, func() ReaderStats {
+		b.mu.Lock()
+		readerStats := *b.readers[ch]
+		delete(b.readers, ch)
+		b.mu.Unlock()
+		close(ch)
+		return readerStats
+	}
+}
+
+// ReadSince returns a channel with capacity that returns all events since t and
+// a cancellation function. t is assumed to be in the past. If t is more recent
+// than the last event in the buffer then all new events are returned.
+func (b *RingBuffer) ReadSince(t time.Time, capacity int) (<-chan *v1.Event, ReaderCancelFunc) {
+	if b.zeroCapacity() {
+		return b.ReadNew(capacity)
+	}
+
+	b.mu.RLock()
+	// If there are events in the buffer then scan backwards to find the first
+	// event before t and then return events after that event.
+	// FIXME replace this linear search with binary search
+	// FIXME can improve search by assuming that events are roughly evenly distributed
+	for seq := b.head - 1; seq >= b.tail; seq-- {
+		et := eventTime(b.buffer[seq%len(b.buffer)])
+		if !et.IsZero() && et.Before(t) {
+			b.mu.RUnlock()
+			return b.ReadFrom(seq+1, capacity)
+		}
+	}
+	b.mu.RUnlock()
+	return b.ReadFrom(0, capacity)
+}
+
+// Status returns the status of b.
+func (b *RingBuffer) Status() RingBufferStatus {
+	b.mu.RLock()
+	s := RingBufferStatus{
+		NumEvents:  b.head - b.tail,
+		SeenEvents: b.head,
+	}
+	for i := b.tail; i < b.head; i++ {
+		if t := eventTime(b.buffer[i%len(b.buffer)]); !t.IsZero() {
+			s.OldestEventTime = t
+			break
+		}
+	}
+	for i := b.head - 1; i >= b.tail; i-- {
+		if t := eventTime(b.buffer[i%len(b.buffer)]); !t.IsZero() {
+			s.NewestEventTime = t
+			break
+		}
+	}
+	b.mu.RUnlock()
+	return s
+}
+
+// Write writes event to r.
+func (b *RingBuffer) Write(event *v1.Event) {
+	b.mu.Lock()
+	if len(b.buffer) > 0 {
+		b.buffer[b.head%len(b.buffer)] = event
+	}
+	b.head++
+	if b.tail < b.head-len(b.buffer) {
+		b.tail = b.head - len(b.buffer)
+	}
+	for ch, readerStats := range b.readers {
+		select {
+		case ch <- event:
+			b.sent++
+			readerStats.Sent++
+		default:
+			b.dropped++
+			readerStats.Dropped++
+		}
+	}
+	b.mu.Unlock()
 }
 
 // zeroCapacity returns true if b has zero capacity.

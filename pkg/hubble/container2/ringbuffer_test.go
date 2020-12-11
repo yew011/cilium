@@ -178,15 +178,34 @@ func TestRingBufferReadAllSlowReader(t *testing.T) {
 	})
 }
 
-func TestRingBufferReadCurrent(t *testing.T) {
-	forEachCapacity(t, testCapacities, nil, func(t *testing.T, capacity int, b *RingBuffer) {
-		// This test requires a non-zero capacity.
-		if capacity == 0 {
-			return
-		}
+func TestRingBufferReadBackward(t *testing.T) {
+	for _, percentFull := range []int{0, 50, 100, 150, 200} {
+		t.Run(fmt.Sprintf("percent_full_%d", percentFull), func(t *testing.T) {
+			forEachCapacity(t, testCapacities, nil, func(t *testing.T, capacity int, b *RingBuffer) {
+				events := newLazyEventStream(t)
+				n := capacity * percentFull / 100
+				events.writeN(b, n)
 
-		for _, percentFull := range []int{0, 50, 100, 200} {
-			t.Run(fmt.Sprintf("percent_full_%d", percentFull), func(t *testing.T) {
+				ch, head, cancel := b.ReadBackward(capacity)
+				assert.Equal(t, events.n(), head)
+				expectedEvents := min(capacity, n)
+				for i := 0; i < expectedEvents; i++ {
+					assert.Equal(t, events.at(n-i-1), <-ch)
+				}
+				requireChannelEmpty(t, ch)
+
+				readerStats := cancel()
+				assert.Equal(t, expectedEvents, readerStats.Sent)
+				assert.Zero(t, readerStats.Dropped)
+			})
+		})
+	}
+}
+
+func TestRingBufferReadCurrent(t *testing.T) {
+	for _, percentFull := range []int{0, 50, 100, 150, 200} {
+		t.Run(fmt.Sprintf("percent_full_%d", percentFull), func(t *testing.T) {
+			forEachCapacity(t, testCapacities, nil, func(t *testing.T, capacity int, b *RingBuffer) {
 				events := newLazyEventStream(t)
 				n := capacity * percentFull / 100
 				events.writeN(b, n)
@@ -203,8 +222,8 @@ func TestRingBufferReadCurrent(t *testing.T) {
 				assert.Zero(t, readerStats.Dropped)
 				requireChannelEmpty(t, ch)
 			})
-		}
-	})
+		})
+	}
 }
 
 func TestRingBufferReadCurrentCancel(t *testing.T) {
