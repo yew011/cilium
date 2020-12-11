@@ -339,10 +339,7 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 	resultCh := make(chan ReaderStats)
 	go func() {
 		var readerStats ReaderStats
-		defer func() {
-			resultCh <- readerStats
-			close(resultCh)
-		}()
+		defer close(resultCh)
 
 		for {
 			// Take a read lock.
@@ -369,6 +366,8 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 				// Retry the test in case the state changed while the mutex was
 				// unlocked.
 				if seq == b.head {
+					// Add the reader (i.e. switch to follow mode) and terminate
+					// this goroutine.
 					b.readers[ch] = &readerStats
 					b.rwMutex.Unlock()
 					return
@@ -396,6 +395,7 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 			// Send the event to the reader or wait for cancellation.
 			select {
 			case <-doneCh:
+				resultCh <- readerStats
 				return
 			case ch <- event:
 				readerStats.Sent++
@@ -410,10 +410,23 @@ func (b *RingBuffer) readFrom(seq, capacity int) (<-chan *v1.Event, ReaderCancel
 	<-readerReadyCh
 
 	return ch, func() ReaderStats {
-		b.rwMutex.Lock()
-		delete(b.readers, ch)
-		b.rwMutex.Unlock()
+		// Stop the goroutine if it is still running.
 		close(doneCh)
+
+		// Stop the follower if we have switched to follow mode.
+		b.rwMutex.Lock()
+		readerStats, ok := b.readers[ch]
+		if ok {
+			delete(b.readers, ch)
+		}
+		b.rwMutex.Unlock()
+
+		// If we were in follow mode then return the stats.
+		if ok {
+			return *readerStats
+		}
+
+		// Otherwise return the stats from the goroutine.
 		return <-resultCh
 	}
 }
